@@ -1,6 +1,8 @@
+import prisma from "@/lib/prisma";
 
 
-export default function Home() {
+export default async function Home() {
+
   return (
     <div>
            
