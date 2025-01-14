@@ -3,7 +3,9 @@
 import prisma from "@/lib/prisma";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { error } from "console";
-import { rule } from "postcss";
+import { Turtle } from "lucide-react";
+import { revalidatePath } from "next/cache";
+import { useReducer } from "react";
 
 export async function syncUser() {
     try{
@@ -55,4 +57,114 @@ export async function  getUserByClerkId(clerkId:string) {
             }
         }
     })
+}
+
+export async function getDbUserId() {
+    const {userId:clerkId} = await auth();
+    if(!clerkId) return null;
+    // if(!clerkId) throw new Error("Unauthroized");
+
+    const user = await getUserByClerkId(clerkId);
+    if(!user) throw new Error("User not found")
+
+    return user.id;
+}
+
+export async function getRandomUser() {
+    const userId = await getDbUserId();
+
+    if(!userId) return[];
+
+    //get random 3 user excludeing ouerselves & users that we alreay followed
+    try{
+        const randomUsers = await prisma.user.findMany({
+            where:{
+                AND:[
+                    {NOT:{id:userId}},
+                    {
+                        NOT:{
+                            followers:{
+                                some:{
+                                    followerId:userId
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+            select:{
+                id:true,
+                name:true,
+                username:true,
+                image:true,
+                _count:{
+                    select:{
+                        followers:true,
+                    }
+                }
+            },
+            take:3,
+        })
+
+        return randomUsers;
+    }catch(error){
+        console.log("Error while fetching random User from DB",error);
+        return [];
+    }
+}
+
+export async function toggleFollow(targetuserId:string) {
+    try{
+        const userId = await getDbUserId();
+
+        if(!userId) return;
+
+        if(userId === targetuserId) throw new Error("You Cannot Follow youself")
+        
+        const existingFollow = await prisma.follows.findUnique({
+            where:{
+                followerId_followingId:{
+                    followerId:userId,
+                    followingId:targetuserId
+                }
+            }
+        })
+
+        if(existingFollow){
+            //unfollow
+            await prisma.follows.delete({
+                where:{
+                    followerId_followingId:{
+                        followerId:userId,
+                        followingId:targetuserId
+                    }
+                }
+            })
+        }
+        else{
+            //follow
+            await prisma.$transaction([
+                prisma.follows.create({
+                    data:{
+                        followerId:userId,
+                        followingId:targetuserId
+                    }
+                }),
+
+                prisma.notification.create({
+                    data:{
+                        type:"FOLLOW",
+                        userId:targetuserId,
+                        creatorId:userId
+                    }
+                })
+            ])
+        }
+
+        revalidatePath('/')
+        return {success:true};
+    }
+    catch(error){
+        console.log("Error While ToogleFollower",error)
+    }
 }
